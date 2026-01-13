@@ -3,56 +3,63 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-# 1. 시스템 초기 설정 및 레이아웃
-st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v3.0", layout="wide")
-st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v3.0")
+# 1. [구조 유지] 페이지 설정 및 제목
+st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v3.2", layout="wide")
+st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v3.2")
 
-# 2. 구글 시트 보안 연결 (Secrets 데이터 활용)
+# 2. [교체] 구글 시트 보안 연결 설정 (v2.6 서비스 계정 방식)
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
     SHEET_NAME = st.secrets["connections"]["gsheets"]["spreadsheet"]
 except Exception as e:
-    st.error("⚠️ 관리자 설정(Secrets)의 spreadsheet 이름이나 인증키가 올바르지 않습니다.")
+    st.error("⚠️ 관리자 설정(Secrets)의 spreadsheet 이름이나 인증키를 확인해주세요.")
     st.stop()
 
-# 3. [생략 없음] 14개 전체 컬럼 표준 규격 정의
+# 3. [구조 유지] 14개 전체 컬럼 규격 정의 (단 한 글자도 생략 없음)
 ALL_COLUMNS = [
     "No", "역산모드", "상태", "품목명", "매입원가(원)", "목표마진(%)", 
     "마진율(%)", "마진액(원)", "목표대비(+/-)", "수수료율(%)", "수수료액(원)", "판매가(원)", "업데이트시각", "수정자"
 ]
 
-# 4. 데이터 로드 함수 (14개 컬럼 강제 고정 로직 포함)
+# 4. [수정] 데이터 로드 함수 (14개 컬럼 강제 고정 및 데이터 형식 무결성 확보)
 @st.cache_data(ttl=10)
 def load_data():
     try:
-        # worksheet=0은 첫 번째 탭을 의미합니다. (문자열 "0"이 아닌 정수 0 사용)
+        # worksheet=0으로 첫 번째 탭을 강제 지정하여 읽어옵니다.
         df = conn.read(spreadsheet=SHEET_NAME, worksheet=0)
         
-        # 구글 시트에 데이터가 있든 없든 14개 컬럼을 강제로 생성하고 정렬합니다.
+        # 14개 컬럼 순서 강제 고정 (시트에 없으면 빈 칸으로 생성)
         df = df.reindex(columns=ALL_COLUMNS)
-        return df.fillna(0)
+        
+        # [에러방지] 숫자형 컬럼들의 데이터 형식을 강제하여 API 오류를 차단합니다.
+        num_cols = ["No", "매입원가(원)", "목표마진(%)", "마진율(%)", "마진액(원)", "목표대비(+/-)", "수수료율(%)", "수수료액(원)", "판매가(원)"]
+        df[num_cols] = df[num_cols].fillna(0).apply(pd.to_numeric, errors='coerce').fillna(0)
+        
+        return df.fillna("")
     except Exception as e:
-        # 오류 발생 시 빈 14개 컬럼의 틀을 반환합니다.
-        return pd.DataFrame(columns=ALL_COLUMNS)
+        # 로드 실패 시에도 시스템이 멈추지 않도록 14칸 빈 틀을 제공합니다.
+        return pd.DataFrame(columns=ALL_COLUMNS).fillna("")
 
-# 5. 사이드바 제어 센터 (v2.3 UI 100% 유지)
+# 5. [구조 유지] 사이드바 메뉴 및 권한 설정 (v2.3 100% 복원)
 st.sidebar.header("🏢 실무 협업 센터")
-user_role = st.sidebar.selectbox("현재 접속 권한", ["홍성유기농(공급사)", "유기농부(판매사)", "대표님(총괄)"])
+user_role = st.sidebar.selectbox("접속 권한 선택", ["홍성유기농(공급사)", "유기농부(판매사)", "대표님(총괄)"])
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("⚙️ 가격 산출 로직 설정")
-actual_mode = st.sidebar.radio("실제 마진율 산출 기준", ["판매가 기준 마진", "원가 기준 마진"])
-target_mode = st.sidebar.radio("목표 가격 산출 기준", ["판매가 기준", "원가 기준"])
+st.sidebar.subheader("⚙️ 마진 및 목표 설정")
+actual_mode = st.sidebar.radio("마진율 계산 기준", ["판매가 기준 마진", "원가 기준 마진"], 
+                             help="실제 마진율을 (마진액/판매가)로 할지 (마진액/원가)로 할지 결정합니다.")
+target_mode = st.sidebar.radio("목표 산출 기준", ["판매가 기준", "원가 기준"], 
+                             help="목표 마진율을 판매가에 곱할지, 원가에 곱할지 결정합니다.")
 
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
-# 6. [생략 없음] 하이브리드 프라이싱 엔진 (v2.3 수식 100% 복원)
-def run_full_pricing_engine(df, act_mode, tgt_mode):
+# 6. [구조 유지] 하이브리드 계산 엔진 (v2.3 원본 수식 100% 복원)
+def calculate_hybrid(df, act_mode, tgt_mode):
     temp_df = df.copy()
     for i in range(len(temp_df)):
         try:
-            # 1. 기본 변수 할당
+            # 기본 변수 추출
             is_rev = bool(temp_df.at[i, "역산모드"])
             cost = float(temp_df.at[i, "매입원가(원)"])
             price = float(temp_df.at[i, "판매가(원)"])
@@ -60,58 +67,50 @@ def run_full_pricing_engine(df, act_mode, tgt_mode):
             f_rate = float(temp_df.at[i, "수수료율(%)"])
             name = str(temp_df.at[i, "품목명"]).replace("🔄 ", "")
 
-            # 2. 가격 결정 (역산 vs 정산)
-            if is_rev: # [역산모드] 판매가(시세)를 기준으로 원가를 도출
+            # A. 판매가/매입가 결정 로직 (역산 vs 정산)
+            if is_rev: # [역산 모드] 판매가(시세) 기준으로 매입원가 산출
                 if tgt_mode == "판매가 기준":
-                    # 원가 = 판매가 * (1 - (수수료율 + 목표마진율) / 100)
                     cost = round(price * (1 - (f_rate + t_rate) / 100))
                 else:
-                    # 원가 = (판매가 * (1 - 수수료율/100)) / (1 + 목표마진율/100)
                     cost = round((price * (1 - f_rate/100)) / (1 + t_rate/100))
                 temp_df.at[i, "매입원가(원)"] = int(cost)
-                temp_df.at[i, "상태"] = "🟠 역산"
-                temp_df.at[i, "품목명"] = f"🔄 {name}"
-            else: # [정산모드] 매입원가를 기준으로 판매가를 도출
+                temp_df.at[i, "상태"], temp_df.at[i, "품목명"] = "🟠 역산", f"🔄 {name}"
+            else: # [정산 모드] 매입원가 기준으로 판매가 산출
                 if tgt_mode == "판매가 기준":
                     denom = 1 - (f_rate + t_rate) / 100
                     price = round(cost / denom) if denom > 0 else 0
                 else:
                     price = round(cost * (1 + (f_rate + t_rate) / 100))
                 temp_df.at[i, "판매가(원)"] = int(price)
-                temp_df.at[i, "상태"] = "🟢 정상"
-                temp_df.at[i, "품목명"] = name
+                temp_df.at[i, "상태"], temp_df.at[i, "품목명"] = "🟢 정상", name
 
-            # 3. 상세 지표 산출
-            # 수수료액 = 판매가 * 수수료율
+            # B. 결과값 상세 계산 (마진액, 마진율, 수수료, 목표대비 차액)
             f_amt = round(price * (f_rate / 100))
-            # 마진액 = 판매가 - 원가 - 수수료액
             m_amt = int(price - cost - f_amt)
             
-            # 실제 마진율 산출
+            # 마진율 계산
             if act_mode == "판매가 기준 마진":
                 m_rate = (m_amt / price * 100) if price > 0 else 0
             else:
                 m_rate = (m_amt / cost * 100) if cost > 0 else 0
             
-            # 목표 마진액 산출 (차액 계산용)
-            if tgt_mode == "판매가 기준":
-                t_amt = round(price * (t_rate/100))
-            else:
-                t_amt = round(cost * (t_rate/100))
+            # 목표 마진액 계산 (차액 비교용)
+            t_amt = round(price * (t_rate/100)) if tgt_mode == "판매가 기준" else round(cost * (t_rate/100))
             
-            # 4. 데이터 프레임에 최종 결과값 반영
             temp_df.at[i, "마진율(%)"] = round(m_rate, 2)
             temp_df.at[i, "마진액(원)"] = int(m_amt)
             temp_df.at[i, "수수료액(원)"] = int(f_amt)
             temp_df.at[i, "목표대비(+/-)"] = int(m_amt - t_amt)
-            
         except Exception:
             continue
             
     return temp_df
 
-# 7. [생략 없음] 메인 에디터 및 14개 컬럼 세부 설정 (v2.3 UI 설정 100% 복원)
-st.info(f"💡 현재 **[{user_role}]** 권한으로 작업 중입니다. 수치 변경 후 '중간 계산' 또는 '클라우드 전송'을 누르세요.")
+# 7. [구조 유지] 메인 데이터 편집 화면 (14개 컬럼 세부 설정 100% 복원)
+st.info(f"💡 현재 **[{user_role}]** 권한으로 작업 중입니다. 수정 후 '중간 계산' 또는 '클라우드 전송'을 누르세요.")
+
+# 에디터 호출 전, 현재 세션 데이터에 ALL_COLUMNS가 모두 있는지 한 번 더 보증합니다.
+st.session_state.df = st.session_state.df.reindex(columns=ALL_COLUMNS).fillna(0)
 
 edited_df = st.data_editor(
     st.session_state.df,
@@ -119,7 +118,7 @@ edited_df = st.data_editor(
     use_container_width=True,
     column_config={
         "No": st.column_config.NumberColumn(width="small"),
-        "역산모드": st.column_config.CheckboxColumn("시세역산", help="체크 시 판매가(시세)를 기준으로 매입원가를 도출합니다."),
+        "역산모드": st.column_config.CheckboxColumn("시세역산", help="체크 시 판매가(시세)를 기준으로 매입원가를 산출합니다."),
         "상태": st.column_config.TextColumn(disabled=True),
         "품목명": st.column_config.TextColumn("품목명", width="medium"),
         "매입원가(원)": st.column_config.NumberColumn("매입원가"),
@@ -136,26 +135,27 @@ edited_df = st.data_editor(
     hide_index=True
 )
 
-# 8. 컨트롤 버튼 및 동기화 로직
+# 8. [수정/유지] 컨트롤 버튼 로직 (중간 계산 추가 및 클라우드 전송 최적화)
 st.sidebar.markdown("---")
+
 if st.sidebar.button("🔢 중간 계산하기 (화면 반영)", use_container_width=True):
-    # 전송 전 화면에 계산 결과만 먼저 보여줍니다.
-    st.session_state.df = run_full_pricing_engine(edited_df, actual_mode, target_mode)
+    # 전송 전에 화면상에서 수식을 즉시 계산하여 세션에 반영합니다.
+    st.session_state.df = calculate_hybrid(edited_df, actual_mode, target_mode)
     st.rerun()
 
-if st.sidebar.button("🚀 클라우드 전송 (최종 저장)", use_container_width=True):
-    with st.spinner('구글 시트 서버에 14개 컬럼 데이터를 기록 중...'):
-        # 최종 계산 수행
-        final_df = run_full_pricing_engine(edited_df, actual_mode, target_mode)
+if st.sidebar.button("🚀 클라우드 전송 (저장/공유)", use_container_width=True):
+    with st.spinner('구글 시트에 14개 컬럼 데이터를 기록 중...'):
+        # 최종 계산 수행 후 이력 추가
+        final_df = calculate_hybrid(edited_df, actual_mode, target_mode)
         final_df['업데이트시각'] = datetime.now().strftime("%m/%d %H:%M")
         final_df['수정자'] = user_role
         
-        # [수정] worksheet=0으로 명시하여 '첫 번째 탭'에 강제 저장
+        # [교체] 구글 시트 업데이트 로직 (worksheet=0 사용)
         conn.update(spreadsheet=SHEET_NAME, worksheet=0, data=final_df)
         
         st.cache_data.clear()
         st.session_state.df = final_df
-        st.sidebar.success("✅ 클라우드 동기화가 완료되었습니다!")
+        st.sidebar.success("✅ 클라우드 동기화 완료!")
         st.rerun()
 
 if st.sidebar.button("🔄 최신 데이터 불러오기", use_container_width=True):
@@ -163,4 +163,6 @@ if st.sidebar.button("🔄 최신 데이터 불러오기", use_container_width=T
     st.session_state.df = load_data()
     st.rerun()
 
-st.sidebar.caption(f"Pricing Lab v3.0 | {datetime.now().year} Hongseong Organic")
+# 9. [구조 유지] 하단 상태 정보 표기
+st.sidebar.markdown("---")
+st.sidebar.caption(f"Pricing Lab v3.2 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
