@@ -4,13 +4,14 @@ import pandas as pd
 from datetime import datetime
 
 # 1. [구조 유지] 페이지 설정 및 제목
-st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v4.0", layout="wide")
-st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v4.0")
+st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v4.1", layout="wide")
+st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v4.1")
 
-# 2. [구조 유지] 구글 시트 보안 연결 설정
+# 2. [수정/교체] 구글 시트 보안 연결 설정 (연결 경로 오타 수정)
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-    SHEET_NAME = st.secrets["secrets"]["gsheets"]["spreadsheet"]
+    # [복구] secrets -> connections로 경로를 바로잡았습니다.
+    SHEET_NAME = st.secrets["connections"]["gsheets"]["spreadsheet"]
 except Exception as e:
     st.error("⚠️ 관리자 설정(Secrets)의 spreadsheet 이름이나 인증키를 확인해주세요.")
     st.stop()
@@ -54,12 +55,11 @@ st.sidebar.subheader("⚙️ 마진 및 목표 설정")
 actual_mode = st.sidebar.radio("마진율 계산 기준", ["판매가 기준 마진", "원가 기준 마진"])
 target_mode = st.sidebar.radio("목표 산출 기준", ["판매가 기준", "원가 기준"])
 
-# 6. [구조 유지] 하이브리드 계산 엔진 (v3.5 수식 100% 유지 + 형변환 강화)
+# 6. [구조 유지] 하이브리드 계산 엔진
 def calculate_hybrid(df, act_mode, tgt_mode):
     temp_df = df.copy()
     for i in range(len(temp_df)):
         try:
-            # [수정] 신규 행 추가 시 발생하는 데이터 공백(None) 및 형식 오류 원천 차단
             is_rev = bool(temp_df.at[i, "역산모드"])
             cost = float(pd.to_numeric(temp_df.at[i, "매입원가(원)"], errors='coerce') or 0)
             price = float(pd.to_numeric(temp_df.at[i, "판매가"], errors='coerce') or 0)
@@ -69,7 +69,6 @@ def calculate_hybrid(df, act_mode, tgt_mode):
             clean_name = str(temp_df.at[i, "품목명"]).replace("🔄 ", "").replace("🚨 ", "").replace("🔻 ", "")
             if clean_name in ["nan", "None"]: clean_name = ""
 
-            # [수정] 신규 행 번호(No) 자동 부여 및 기본 상태 설정
             if i > 0 and (pd.isna(temp_df.at[i, "No"]) or temp_df.at[i, "No"] == 0):
                 temp_df.at[i, "No"] = temp_df.at[i-1, "No"] + 1
 
@@ -103,17 +102,15 @@ def calculate_hybrid(df, act_mode, tgt_mode):
         except: continue
     return temp_df
 
-# 7. [교체] 반응형 데이터 엔진 (포커스 유지 및 신규 행 기본값 주입)
-st.info(f"💡 접속: **[{user_role}]** | 한 번 클릭 후 숫자 입력, 탭(Tab)으로 빠르게 이동하세요.")
+# 7. [구조 유지] 반응형 데이터 엔진 (포커스 유지 & 자동 완성)
+st.info(f"💡 접속: **[{user_role}]** | 값 수정 후 'Tab' 시 즉시 계산됩니다. (포커스 유지)")
 
-# [핵심 교체] 표를 그리기 직전에 항상 최신 수식을 계산하여 화면에 뿌립니다.
 st.session_state.df = calculate_hybrid(st.session_state.df, actual_mode, target_mode)
 
 display_df = st.session_state.df.copy()
 if search_term:
     display_df = display_df[display_df["품목명"].str.contains(search_term, na=False, case=False)]
 
-# 데이터 에디터 (포커스 유지를 위해 rerun 없이 상태만 업데이트)
 edited_df = st.data_editor(
     display_df,
     num_rows="dynamic",
@@ -135,30 +132,24 @@ edited_df = st.data_editor(
         "수정자": st.column_config.TextColumn(disabled=True)
     },
     hide_index=True,
-    key="v4_pricing_editor"
+    key="v41_pricing_editor"
 )
 
-# [핵심 교체] 수정 사항이 있을 때만 메모리를 갱신하되, 새로고침(rerun)은 버튼 클릭 시나 구조 변경 시에만 발생하도록 유도
 if not display_df.equals(edited_df):
     st.session_state.df.update(edited_df)
-    # 신규 행 추가 시 14개 컬럼 형식을 강제로 맞춤 (공란 방지)
     if len(edited_df) > len(st.session_state.df):
         st.session_state.df = edited_df.reindex(columns=ALL_COLUMNS).fillna(0)
         st.session_state.df["역산모드"] = st.session_state.df["역산모드"].astype(bool)
-        st.rerun() # 행 구조가 바뀔 때만 예외적으로 새로고침하여 번호 자동부여 적용
+        st.rerun()
 
 # 8. [구조 유지] 컨트롤 버튼 로직
 st.sidebar.markdown("---")
-
 if st.sidebar.button("🚀 클라우드 전송 (저장/공유)", use_container_width=True):
     with st.spinner('구글 시트에 14개 컬럼 데이터 동기화 중...'):
-        # 전송 전 최종 계산 및 정보 기록
         final_df = calculate_hybrid(st.session_state.df, actual_mode, target_mode)
         final_df['업데이트시각'] = datetime.now().strftime("%m/%d %H:%M")
         final_df['수정자'] = user_role
-        
         conn.update(spreadsheet=SHEET_NAME, worksheet=0, data=final_df)
-        
         st.cache_data.clear()
         st.session_state.df = final_df
         st.sidebar.success("✅ 클라우드 저장 완료!")
@@ -170,4 +161,4 @@ if st.sidebar.button("🔄 최신 데이터 불러오기", use_container_width=T
     st.rerun()
 
 # 9. [구조 유지] 하단 상태 정보 표기
-st.sidebar.caption(f"Pricing Lab v4.0 | {datetime.now().strftime('%H:%M:%S')}")
+st.sidebar.caption(f"Pricing Lab v4.1 | {datetime.now().strftime('%H:%M:%S')}")
