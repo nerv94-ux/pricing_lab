@@ -4,8 +4,8 @@ import pandas as pd
 from datetime import datetime
 
 # 1. [구조 유지] 페이지 설정 및 제목
-st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v3.3", layout="wide")
-st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v3.3")
+st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v3.4", layout="wide")
+st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v3.4")
 
 # 2. [구조 유지] 구글 시트 보안 연결 설정
 try:
@@ -21,8 +21,8 @@ ALL_COLUMNS = [
     "마진율(%)", "마진액(원)", "목표대비(+/-)", "수수료율(%)", "수수료액(원)", "판매가(원)", "업데이트시각", "수정자"
 ]
 
-# 4. [수정/교체] 데이터 로드 함수 (데이터 형식 충돌 원천 차단)
-@st.cache_data(ttl=10)
+# 4. [구조 유지/교체] 데이터 로드 함수 (데이터 형식 무결성 및 로딩 속도 최적화)
+@st.cache_data(ttl=5)
 def load_data():
     try:
         # worksheet=0으로 첫 번째 탭을 읽어옵니다.
@@ -31,20 +31,21 @@ def load_data():
         # 1. 컬럼 순서 및 존재 여부 강제 고정
         df = df.reindex(columns=ALL_COLUMNS)
         
-        # 2. [핵심 교체] 숫자형 컬럼 강제 변환 (StreamlitAPIException 방지)
-        # 빈 값은 NaN이 아닌 0으로 처리하며, 명확히 숫자 타입으로 정의합니다.
+        # 2. [교체] 숫자형 데이터 정제 (입력 시 충돌 방지 및 정확한 타입 지정)
         num_cols = ["No", "매입원가(원)", "목표마진(%)", "마진율(%)", "마진액(원)", "목표대비(+/-)", "수수료율(%)", "수수료액(원)", "판매가(원)"]
         for col in num_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
-        # 3. 불리언(체크박스) 및 문자열 형식 강제
+        # 3. 불리언 및 문자열 형식 강제
         df["역산모드"] = df["역산모드"].astype(bool)
         df["상태"] = df["상태"].astype(str).replace("0", "🟢 정상")
         df["품목명"] = df["품목명"].astype(str).replace("0", "")
+        df["업데이트시각"] = df["업데이트시각"].astype(str).replace("0", "-")
+        df["수정자"] = df["수정자"].astype(str).replace("0", "-")
         
         return df
     except Exception as e:
-        # 실패 시 구조에 맞는 빈 데이터프레임 생성
+        # 로드 실패 시 빈 데이터프레임 구조 반환
         empty_df = pd.DataFrame(columns=ALL_COLUMNS)
         num_cols = ["No", "매입원가(원)", "목표마진(%)", "마진율(%)", "마진액(원)", "목표대비(+/-)", "수수료율(%)", "수수료액(원)", "판매가(원)"]
         for col in num_cols:
@@ -66,7 +67,7 @@ target_mode = st.sidebar.radio("목표 산출 기준", ["판매가 기준", "원
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
-# 6. [구조 유지] 하이브리드 계산 엔진 (v2.3 원본 로직 100% 보존)
+# 6. [구조 유지] 하이브리드 계산 엔진 (v2.3 원본 수식 100% 보존)
 def calculate_hybrid(df, act_mode, tgt_mode):
     temp_df = df.copy()
     for i in range(len(temp_df)):
@@ -96,7 +97,7 @@ def calculate_hybrid(df, act_mode, tgt_mode):
                 temp_df.at[i, "판매가(원)"] = int(price)
                 temp_df.at[i, "상태"], temp_df.at[i, "품목명"] = "🟢 정상", name
 
-            # B. 결과값 상세 계산
+            # B. 결과값 상세 계산 (마진액, 마진율, 수수료액, 목표차액)
             f_amt = round(price * (f_rate / 100))
             m_amt = int(price - cost - f_amt)
             
@@ -118,10 +119,10 @@ def calculate_hybrid(df, act_mode, tgt_mode):
             
     return temp_df
 
-# 7. [구조 유지] 메인 데이터 편집 화면 (v2.3 컬럼 설정 100% 유지)
-st.info(f"💡 현재 **[{user_role}]** 권한으로 작업 중입니다. 수정 후 '중간 계산' 또는 '클라우드 전송'을 누르세요.")
+# 7. [구조 유지/교체] 메인 에디터 (수정 편의성 최적화 교체)
+st.info(f"💡 접속: **[{user_role}]** | 한 번 클릭 후 바로 숫자를 입력하세요. 수정 후 '중간 계산' 필수.")
 
-# 에디터 호출 전 최종 타입 검증 (교체 지점)
+# [교체] 에디터 진입 전 타입 강제 (클릭 반응성 향상)
 st.session_state.df["역산모드"] = st.session_state.df["역산모드"].astype(bool)
 
 edited_df = st.data_editor(
@@ -130,17 +131,17 @@ edited_df = st.data_editor(
     use_container_width=True,
     column_config={
         "No": st.column_config.NumberColumn(width="small"),
-        "역산모드": st.column_config.CheckboxColumn("시세역산"),
+        "역산모드": st.column_config.CheckboxColumn("시세역산", help="단일 클릭으로 역산 모드 전환"),
         "상태": st.column_config.TextColumn(disabled=True),
         "품목명": st.column_config.TextColumn("품목명", width="medium"),
-        "매입원가(원)": st.column_config.NumberColumn("매입원가"),
+        "매입원가(원)": st.column_config.NumberColumn("매입원가", format="%d"),
         "목표마진(%)": st.column_config.NumberColumn("목표마진(%)", format="%.1f%%"),
         "마진율(%)": st.column_config.NumberColumn("실제마진율(%)", format="%.2f%%", disabled=True),
-        "마진액(원)": st.column_config.NumberColumn("마진금액", disabled=True),
+        "마진액(원)": st.column_config.NumberColumn("마진금액", format="%d", disabled=True),
         "목표대비(+/-)": st.column_config.NumberColumn("목표대비", format="%+d", disabled=True),
         "수수료율(%)": st.column_config.NumberColumn("수수료율(%)", format="%.1f%%"),
-        "수수료액(원)": st.column_config.NumberColumn("수수료금액", disabled=True),
-        "판매가(원)": st.column_config.NumberColumn("판매가(시세)"),
+        "수수료액(원)": st.column_config.NumberColumn("수수료금액", format="%d", disabled=True),
+        "판매가(원)": st.column_config.NumberColumn("판매가(시세)", format="%d"),
         "업데이트시각": st.column_config.TextColumn(disabled=True),
         "수정자": st.column_config.TextColumn(disabled=True)
     },
@@ -151,16 +152,17 @@ edited_df = st.data_editor(
 st.sidebar.markdown("---")
 
 if st.sidebar.button("🔢 중간 계산하기 (화면 반영)", use_container_width=True):
+    # 수정된 데이터를 즉시 계산하여 화면에 반영
     st.session_state.df = calculate_hybrid(edited_df, actual_mode, target_mode)
     st.rerun()
 
 if st.sidebar.button("🚀 클라우드 전송 (저장/공유)", use_container_width=True):
-    with st.spinner('구글 시트에 14개 컬럼 데이터를 기록 중...'):
+    with st.spinner('구글 시트에 14개 컬럼 데이터 동기화 중...'):
         final_df = calculate_hybrid(edited_df, actual_mode, target_mode)
         final_df['업데이트시각'] = datetime.now().strftime("%m/%d %H:%M")
         final_df['수정자'] = user_role
         
-        # 클라우드 업데이트
+        # 구글 시트 저장 (worksheet=0)
         conn.update(spreadsheet=SHEET_NAME, worksheet=0, data=final_df)
         
         st.cache_data.clear()
@@ -175,4 +177,4 @@ if st.sidebar.button("🔄 최신 데이터 불러오기", use_container_width=T
 
 # 9. [구조 유지] 하단 상태 정보 표기
 st.sidebar.markdown("---")
-st.sidebar.caption(f"Pricing Lab v3.3 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.sidebar.caption(f"Pricing Lab v3.4 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
