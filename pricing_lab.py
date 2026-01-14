@@ -37,7 +37,7 @@ def load_data():
     except Exception as e:
         return pd.DataFrame(columns=ALL_COLUMNS).fillna(0)
 
-# 6. [구조 유지] 하이브리드 계산 엔진 (원본 수식 100% 유지)
+# 6. [구조 유지] 하이브리드 계산 엔진 (수식 및 아이콘 로직 100% 원본 유지)
 def calculate_hybrid(df, act_mode, tgt_mode):
     temp_df = df.copy()
     for i in range(len(temp_df)):
@@ -51,12 +51,12 @@ def calculate_hybrid(df, act_mode, tgt_mode):
             clean_name = str(temp_df.at[i, "품목명"]).replace("🔄 ", "").replace("🚨 ", "").replace("🔻 ", "")
             if clean_name in ["nan", "None", "0"]: clean_name = ""
 
-            if is_rev: # 역산 모드
+            if is_rev:
                 if tgt_mode == "판매가 기준": cost = round(price * (1 - (f_rate + t_rate) / 100))
                 else: cost = round((price * (1 - f_rate/100)) / (1 + t_rate/100))
                 temp_df.at[i, "매입원가(원)"] = int(cost)
                 status_icon, name_prefix = "🟠", f"🔄 {clean_name}"
-            else: # 정산 모드
+            else:
                 if tgt_mode == "판매가 기준":
                     denom = 1 - (f_rate + t_rate) / 100
                     price = round(cost / denom) if denom > 0 else 0
@@ -81,18 +81,15 @@ def calculate_hybrid(df, act_mode, tgt_mode):
         except: continue
     return temp_df
 
-# 7. [신규/교체] 무한 루프 방지 전용 콜백 함수
+# 7. [신규] 무한 루프 방지 콜백 함수 (데이터 변경 시에만 딱 한 번 실행)
 def on_data_change():
-    # 에디터의 변경 내용을 가져옴
     change_info = st.session_state["pricing_editor"]
     df = st.session_state.df.copy()
     
-    # 1. 수정된 값 반영
     for row_idx, edit_values in change_info["edited_rows"].items():
         for col, val in edit_values.items():
             df.at[row_idx, col] = val
             
-    # 2. 추가된 행 처리 (기본값 및 번호 자동 부여)
     for added_row in change_info["added_rows"]:
         new_row = {col: 0 for col in ALL_COLUMNS}
         new_row.update(added_row)
@@ -102,11 +99,10 @@ def on_data_change():
         new_row["No"] = last_no + 1
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
         
-    # 3. 삭제된 행 처리
     if change_info["deleted_rows"]:
         df = df.drop(change_info["deleted_rows"]).reset_index(drop=True)
 
-    # 4. 즉시 계산 후 세션 업데이트
+    # 수정 즉시 계산 수행
     st.session_state.df = calculate_hybrid(df, st.session_state.actual_mode, st.session_state.target_mode)
 
 # 5. [구조 유지] 세션 상태 초기화 및 사이드바
@@ -119,18 +115,16 @@ user_role = st.sidebar.selectbox("접속 권한 선택", ["홍성유기농(공�
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 마진 및 목표 설정")
-# 라디오 버튼 값을 세션에 저장하여 콜백에서 참조
 st.session_state.actual_mode = st.sidebar.radio("마진율 계산 기준", ["판매가 기준 마진", "원가 기준 마진"])
 st.session_state.target_mode = st.sidebar.radio("목표 산출 기준", ["판매가 기준", "원가 기준"])
 
-# 8. [교체] 안정형 라이브 에디터
-st.info(f"💡 접속: **[{user_role}]** | 값 수정 후 탭(Tab) 시 무한루프 없이 즉시 계산됩니다.")
+# 8. [교체] 안정형 라이브 에디터 (st.rerun 제거로 포커스 유지)
+st.info(f"💡 현재 권한: **[{user_role}]** | 값 수정 후 탭(Tab) 시 화면 깜빡임 없이 즉시 계산됩니다.")
 
 display_df = st.session_state.df.copy()
 if search_term:
     display_df = display_df[display_df["품목명"].str.contains(search_term, na=False, case=False)]
 
-# 데이터 에디터 본체 (on_change 콜백 사용)
 st.data_editor(
     display_df,
     num_rows="dynamic",
@@ -153,10 +147,10 @@ st.data_editor(
     },
     hide_index=True,
     key="pricing_editor",
-    on_change=on_data_change # 데이터 변경 시에만 딱 한 번 실행됨
+    on_change=on_data_change # 무한 루프 차단 핵심
 )
 
-# 9. [구조 유지] 저장 및 불러오기 버튼
+# 9. [구조 유지] 저장/불러오기 버튼
 st.sidebar.markdown("---")
 if st.sidebar.button("🚀 클라우드 전송 (저장/공유)", use_container_width=True):
     with st.spinner('구글 시트 동기화 중...'):
