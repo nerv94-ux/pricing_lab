@@ -4,13 +4,12 @@ import pandas as pd
 from datetime import datetime
 
 # 1. [구조 유지] 페이지 설정 및 제목
-st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v4.4", layout="wide")
-st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v4.4")
+st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v4.5", layout="wide")
+st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v4.5")
 
-# 2. [복구] 구글 시트 보안 연결 설정 (경로 오류 완벽 수정)
+# 2. [복구] 구글 시트 보안 연결 설정
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-    # 대표님 설정값에 맞춰 connections 경로로 고정했습니다.
     SHEET_NAME = st.secrets["connections"]["gsheets"]["spreadsheet"]
 except Exception as e:
     st.error("⚠️ 관리자 설정(Secrets)의 spreadsheet 이름이나 인증키를 확인해주세요.")
@@ -27,6 +26,9 @@ ALL_COLUMNS = [
 def load_data():
     try:
         df = conn.read(spreadsheet=SHEET_NAME, worksheet=0)
+        # 데이터가 아예 없을 경우 빈 틀 생성
+        if df.empty or len(df.columns) < 2:
+            df = pd.DataFrame(columns=ALL_COLUMNS)
         df = df.reindex(columns=ALL_COLUMNS)
         num_cols = ["No", "매입원가(원)", "목표마진(%)", "마진율(%)", "마진액(원)", "목표대비(+/-)", "수수료율(%)", "수수료액(원)", "판매가"]
         for col in num_cols:
@@ -40,6 +42,7 @@ def load_data():
 
 # 6. [구조 유지] 하이브리드 계산 엔진 (수식 및 아이콘 로직 100% 원본 유지)
 def calculate_hybrid(df, act_mode, tgt_mode):
+    if df.empty: return df
     temp_df = df.copy()
     for i in range(len(temp_df)):
         try:
@@ -52,12 +55,13 @@ def calculate_hybrid(df, act_mode, tgt_mode):
             clean_name = str(temp_df.at[i, "품목명"]).replace("🔄 ", "").replace("🚨 ", "").replace("🔻 ", "")
             if clean_name in ["nan", "None", "0"]: clean_name = ""
 
-            if is_rev: # 역산 모드
+            # [핵심 수식 - 원본 보존]
+            if is_rev:
                 if tgt_mode == "판매가 기준": cost = round(price * (1 - (f_rate + t_rate) / 100))
                 else: cost = round((price * (1 - f_rate/100)) / (1 + t_rate/100))
                 temp_df.at[i, "매입원가(원)"] = int(cost)
                 status_icon, name_prefix = "🟠", f"🔄 {clean_name}"
-            else: # 정산 모드
+            else:
                 if tgt_mode == "판매가 기준":
                     denom = 1 - (f_rate + t_rate) / 100
                     price = round(cost / denom) if denom > 0 else 0
@@ -82,31 +86,38 @@ def calculate_hybrid(df, act_mode, tgt_mode):
         except: continue
     return temp_df
 
-# 7. [수정 핵심] 무한 루프 차단 콜백 함수
+# 7. [수정] 무한 루프 방지 및 즉각 계산 콜백
 def on_data_change():
     change_info = st.session_state["pricing_editor"]
-    df = st.session_state.df.copy()
+    # 현재 세션 데이터가 비어있으면 ALL_COLUMNS 구조로 초기화
+    if st.session_state.df is None or st.session_state.df.empty:
+        df = pd.DataFrame(columns=ALL_COLUMNS)
+    else:
+        df = st.session_state.df.copy()
     
-    # 1. 편집된 행 반영
+    # 1. 수정된 값 반영
     for row_idx, edit_values in change_info["edited_rows"].items():
         for col, val in edit_values.items():
             df.at[row_idx, col] = val
             
-    # 2. 추가된 행 기본값 세팅 (공란 방지)
+    # 2. 추가된 행 처리 (번호 및 기본값 강제 주입)
     for added_row in change_info["added_rows"]:
-        new_row = {col: 0 for col in ALL_COLUMNS}
-        new_row.update(added_row)
-        new_row["역산모드"] = new_row.get("역산모드", False)
-        new_row["상태"] = "🟢 정상"
+        new_row_data = {col: 0 for col in ALL_COLUMNS}
+        new_row_data.update(added_row)
+        new_row_data["역산모드"] = bool(new_row_data.get("역산모드", False))
+        new_row_data["상태"] = "🟢 정상"
+        
+        # 번호 부여
         last_no = df["No"].max() if not df.empty else 0
-        new_row["No"] = last_no + 1
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        new_row_data["No"] = int(last_no) + 1
+        
+        df = pd.concat([df, pd.DataFrame([new_row_data])], ignore_index=True)
         
     # 3. 삭제된 행 처리
     if change_info["deleted_rows"]:
         df = df.drop(change_info["deleted_rows"]).reset_index(drop=True)
 
-    # 수정 즉시 계산 수행 후 저장 (st.rerun 없이 메모리만 업데이트)
+    # 4. 즉시 계산 엔진 가동 (데이터 타입 강제 고정)
     st.session_state.df = calculate_hybrid(df, st.session_state.actual_mode, st.session_state.target_mode)
 
 # 5. [구조 유지] 세션 상태 초기화 및 사이드바
@@ -122,8 +133,8 @@ st.sidebar.subheader("⚙️ 마진 및 목표 설정")
 st.session_state.actual_mode = st.sidebar.radio("마진율 계산 기준", ["판매가 기준 마진", "원가 기준 마진"])
 st.session_state.target_mode = st.sidebar.radio("목표 산출 기준", ["판매가 기준", "원가 기준"])
 
-# 8. [교체] 안정형 라이브 에디터 (st.rerun 제거로 포커스 유지)
-st.info(f"💡 현재 권한: **[{user_role}]** | 값 수정 후 탭(Tab) 시 화면 깜빡임 없이 즉시 계산됩니다.")
+# 8. [교체] 반응형 라이브 에디터 (st.rerun 없이 콜백 사용)
+st.info(f"💡 접속: **[{user_role}]** | 시트가 비어있어도 '+' 버튼으로 품목을 추가하면 즉시 계산됩니다.")
 
 display_df = st.session_state.df.copy()
 if search_term:
@@ -151,13 +162,13 @@ st.data_editor(
     },
     hide_index=True,
     key="pricing_editor",
-    on_change=on_data_change # 무한 루프 차단 핵심
+    on_change=on_data_change 
 )
 
 # 9. [구조 유지] 저장/불러오기 버튼
 st.sidebar.markdown("---")
 if st.sidebar.button("🚀 클라우드 전송 (저장/공유)", use_container_width=True):
-    with st.spinner('구글 시트 동기화 중...'):
+    with st.spinner('구글 시트에 데이터 동기화 중...'):
         final_df = calculate_hybrid(st.session_state.df, st.session_state.actual_mode, st.session_state.target_mode)
         final_df['업데이트시각'] = datetime.now().strftime("%m/%d %H:%M")
         final_df['수정자'] = user_role
@@ -172,4 +183,4 @@ if st.sidebar.button("🔄 최신 데이터 불러오기", use_container_width=T
     st.session_state.df = load_data()
     st.rerun()
 
-st.sidebar.caption(f"v4.4 Stable Engine | {datetime.now().strftime('%H:%M:%S')}")
+st.sidebar.caption(f"v4.5 Robust Engine | {datetime.now().strftime('%H:%M:%S')}")
