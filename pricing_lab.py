@@ -4,12 +4,13 @@ import pandas as pd
 from datetime import datetime
 
 # 1. [구조 유지] 페이지 설정 및 제목
-st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v4.3", layout="wide")
-st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v4.3")
+st.set_page_config(page_title="유기농 통합 가격 관리 시스템 v4.4", layout="wide")
+st.title("🥬 홍성유기농-유기농부 가격 협업 플랫폼 v4.4")
 
 # 2. [복구] 구글 시트 보안 연결 설정 (경로 오류 완벽 수정)
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
+    # 대표님 설정값에 맞춰 connections 경로로 고정했습니다.
     SHEET_NAME = st.secrets["connections"]["gsheets"]["spreadsheet"]
 except Exception as e:
     st.error("⚠️ 관리자 설정(Secrets)의 spreadsheet 이름이나 인증키를 확인해주세요.")
@@ -51,12 +52,12 @@ def calculate_hybrid(df, act_mode, tgt_mode):
             clean_name = str(temp_df.at[i, "품목명"]).replace("🔄 ", "").replace("🚨 ", "").replace("🔻 ", "")
             if clean_name in ["nan", "None", "0"]: clean_name = ""
 
-            if is_rev:
+            if is_rev: # 역산 모드
                 if tgt_mode == "판매가 기준": cost = round(price * (1 - (f_rate + t_rate) / 100))
                 else: cost = round((price * (1 - f_rate/100)) / (1 + t_rate/100))
                 temp_df.at[i, "매입원가(원)"] = int(cost)
                 status_icon, name_prefix = "🟠", f"🔄 {clean_name}"
-            else:
+            else: # 정산 모드
                 if tgt_mode == "판매가 기준":
                     denom = 1 - (f_rate + t_rate) / 100
                     price = round(cost / denom) if denom > 0 else 0
@@ -81,15 +82,17 @@ def calculate_hybrid(df, act_mode, tgt_mode):
         except: continue
     return temp_df
 
-# 7. [신규] 무한 루프 방지 콜백 함수 (데이터 변경 시에만 딱 한 번 실행)
+# 7. [수정 핵심] 무한 루프 차단 콜백 함수
 def on_data_change():
     change_info = st.session_state["pricing_editor"]
     df = st.session_state.df.copy()
     
+    # 1. 편집된 행 반영
     for row_idx, edit_values in change_info["edited_rows"].items():
         for col, val in edit_values.items():
             df.at[row_idx, col] = val
             
+    # 2. 추가된 행 기본값 세팅 (공란 방지)
     for added_row in change_info["added_rows"]:
         new_row = {col: 0 for col in ALL_COLUMNS}
         new_row.update(added_row)
@@ -99,10 +102,11 @@ def on_data_change():
         new_row["No"] = last_no + 1
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
         
+    # 3. 삭제된 행 처리
     if change_info["deleted_rows"]:
         df = df.drop(change_info["deleted_rows"]).reset_index(drop=True)
 
-    # 수정 즉시 계산 수행
+    # 수정 즉시 계산 수행 후 저장 (st.rerun 없이 메모리만 업데이트)
     st.session_state.df = calculate_hybrid(df, st.session_state.actual_mode, st.session_state.target_mode)
 
 # 5. [구조 유지] 세션 상태 초기화 및 사이드바
@@ -168,4 +172,4 @@ if st.sidebar.button("🔄 최신 데이터 불러오기", use_container_width=T
     st.session_state.df = load_data()
     st.rerun()
 
-st.sidebar.caption(f"v4.3 Stable Engine | {datetime.now().strftime('%H:%M:%S')}")
+st.sidebar.caption(f"v4.4 Stable Engine | {datetime.now().strftime('%H:%M:%S')}")
